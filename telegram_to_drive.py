@@ -64,10 +64,17 @@ def get_folder_id(drive):
     return folder["id"]
 
 
-def upload(drive, folder_id, path, name):
+def already_uploaded(drive, key):
+    """Cek apakah pesan Telegram ini sudah pernah diunggah (anti-duplikat)."""
+    q = f"appProperties has {{ key='tg' and value='{key}' }} and trashed=false"
+    res = drive.files().list(q=q, fields="files(id)", spaces="drive").execute()
+    return bool(res["files"])
+
+
+def upload(drive, folder_id, path, name, key):
     media = MediaFileUpload(path, resumable=True, chunksize=32 * 1024 * 1024)
     req = drive.files().create(
-        body={"name": name, "parents": [folder_id]},
+        body={"name": name, "parents": [folder_id], "appProperties": {"tg": key}},
         media_body=media,
         fields="id",
     )
@@ -123,9 +130,16 @@ async def main():
                 drive = drive_service()
                 folder_id = get_folder_id(drive)
             name = pick_name(m)
+            key = f"{m.chat_id}_{m.id}"
+            if already_uploaded(drive, key):
+                # Sudah ada di Drive dari run sebelumnya: lewati, jangan unggah ulang.
+                state["last_id"] = m.id
+                save_state(state)
+                print("SKIP: 1 file sudah ada di Drive")
+                continue
             with tempfile.TemporaryDirectory() as tmp:
                 path = await m.download_media(file=os.path.join(tmp, name))
-                upload(drive, folder_id, path, name)
+                upload(drive, folder_id, path, name, key)
             state["last_id"] = m.id
             save_state(state)
             await client.send_message(SOURCE, f"✅ Tersimpan di Drive: {name}", reply_to=m.id)
